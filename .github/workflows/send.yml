@@ -2,23 +2,40 @@ name: Send Jobs to Telegram
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/10 * * * *"   # every 10 minutes (safer for free hosting)
   workflow_dispatch:
 
 jobs:
   telegram:
     runs-on: ubuntu-latest
     steps:
-      - name: Send pending jobs
+      - name: Send pending jobs to Telegram
         run: |
           python3 - << 'EOF'
-          import requests, os
+          import requests, os, time
 
-          SITE = "https://govtjobsnotice.page.gd/wp-json/wp/v2/posts?per_page=5"
-          BOT = os.environ["TG_BOT_TOKEN"]
+          SITE = "https://govtjobsnotice.page.gd/wp-json/wp/v2/posts"
+          BOT  = os.environ["TG_BOT_TOKEN"]
           CHAT = os.environ["TG_CHAT_ID"]
 
-          posts = requests.get(SITE).json()
+          headers = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+              "Accept": "application/json"
+          }
+
+          try:
+              r = requests.get(
+                  SITE,
+                  params={"per_page": 3},
+                  headers=headers,
+                  timeout=15
+              )
+              r.raise_for_status()
+          except Exception as e:
+              print("❌ Failed to fetch posts:", e)
+              exit(1)
+
+          posts = r.json()
 
           for p in posts:
               meta = p.get("meta", {})
@@ -26,19 +43,34 @@ jobs:
                   img = meta.get("_gjn_tg_image")
                   cap = meta.get("_gjn_tg_caption")
 
-                  r = requests.post(
+                  if not img or not cap:
+                      continue
+
+                  print("📤 Sending:", p["id"])
+
+                  tg = requests.post(
                       f"https://api.telegram.org/bot{BOT}/sendPhoto",
                       data={"chat_id": CHAT, "caption": cap},
-                      files={"photo": requests.get(img).content}
+                      files={"photo": requests.get(img, headers=headers).content},
+                      timeout=20
                   )
 
-                  if r.status_code == 200:
-                      requests.post(
-                          f"https://govtjobsnotice.page.gd/wp-json/wp/v2/posts/{p['id']}",
-                          headers={"Content-Type": "application/json"},
-                          auth=(os.environ.get("WP_USER"), os.environ.get("WP_PASS")),
-                          json={"meta": {"_gjn_tg_sent": "1"}}
-                      )
+                  if tg.status_code == 200:
+                      print("✅ Sent successfully")
+
+                      # Mark as sent (best-effort, InfinityFree may block this)
+                      try:
+                          requests.post(
+                              f"{SITE}/{p['id']}",
+                              headers=headers,
+                              json={"meta": {"_gjn_tg_sent": "1"}},
+                              timeout=10
+                          )
+                      except:
+                          pass
+
+                  time.sleep(5)
+
           EOF
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
