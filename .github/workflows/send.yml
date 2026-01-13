@@ -1,0 +1,45 @@
+name: Send Jobs to Telegram
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  telegram:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send pending jobs
+        run: |
+          python3 - << 'EOF'
+          import requests, os
+
+          SITE = "https://govtjobsnotice.page.gd/wp-json/wp/v2/posts?per_page=5"
+          BOT = os.environ["TG_BOT_TOKEN"]
+          CHAT = os.environ["TG_CHAT_ID"]
+
+          posts = requests.get(SITE).json()
+
+          for p in posts:
+              meta = p.get("meta", {})
+              if meta.get("_gjn_tg_ready") == "1" and not meta.get("_gjn_tg_sent"):
+                  img = meta.get("_gjn_tg_image")
+                  cap = meta.get("_gjn_tg_caption")
+
+                  r = requests.post(
+                      f"https://api.telegram.org/bot{BOT}/sendPhoto",
+                      data={"chat_id": CHAT, "caption": cap},
+                      files={"photo": requests.get(img).content}
+                  )
+
+                  if r.status_code == 200:
+                      requests.post(
+                          f"https://govtjobsnotice.page.gd/wp-json/wp/v2/posts/{p['id']}",
+                          headers={"Content-Type": "application/json"},
+                          auth=(os.environ.get("WP_USER"), os.environ.get("WP_PASS")),
+                          json={"meta": {"_gjn_tg_sent": "1"}}
+                      )
+          EOF
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
