@@ -2,7 +2,7 @@ name: Send Jobs to Telegram
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # every 10 minutes (safer for free hosting)
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -12,9 +12,9 @@ jobs:
       - name: Send pending jobs to Telegram
         run: |
           python3 - << 'EOF'
-          import requests, os, time
+          import requests, os, time, sys
 
-          SITE = "https://govtjobsnotice.page.gd/wp-json/wp/v2/posts"
+          SITE = "https://govtjobsnotice.page.gd/?rest_route=/wp/v2/posts"
           BOT  = os.environ["TG_BOT_TOKEN"]
           CHAT = os.environ["TG_CHAT_ID"]
 
@@ -23,30 +23,40 @@ jobs:
               "Accept": "application/json"
           }
 
-          try:
-              r = requests.get(
-                  SITE,
-                  params={"per_page": 3},
-                  headers=headers,
-                  timeout=15
-              )
-              r.raise_for_status()
-          except Exception as e:
-              print("❌ Failed to fetch posts:", e)
-              exit(1)
+          print("🔎 Fetching posts...")
 
-          posts = r.json()
+          r = requests.get(
+              SITE,
+              params={"per_page": 3},
+              headers=headers,
+              timeout=15
+          )
+
+          if r.status_code != 200:
+              print("❌ HTTP error:", r.status_code)
+              print(r.text[:200])
+              sys.exit(1)
+
+          try:
+              posts = r.json()
+          except Exception:
+              print("❌ Response is not JSON (blocked by host)")
+              print(r.text[:200])
+              sys.exit(1)
+
+          print(f"✅ Found {len(posts)} posts")
 
           for p in posts:
               meta = p.get("meta", {})
               if meta.get("_gjn_tg_ready") == "1" and not meta.get("_gjn_tg_sent"):
+
                   img = meta.get("_gjn_tg_image")
                   cap = meta.get("_gjn_tg_caption")
 
                   if not img or not cap:
                       continue
 
-                  print("📤 Sending:", p["id"])
+                  print("📤 Sending post ID:", p["id"])
 
                   tg = requests.post(
                       f"https://api.telegram.org/bot{BOT}/sendPhoto",
@@ -57,17 +67,6 @@ jobs:
 
                   if tg.status_code == 200:
                       print("✅ Sent successfully")
-
-                      # Mark as sent (best-effort, InfinityFree may block this)
-                      try:
-                          requests.post(
-                              f"{SITE}/{p['id']}",
-                              headers=headers,
-                              json={"meta": {"_gjn_tg_sent": "1"}},
-                              timeout=10
-                          )
-                      except:
-                          pass
 
                   time.sleep(5)
 
